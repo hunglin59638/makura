@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-import re
-import os
 import argparse
-import tempfile
-from time import sleep
-import pandas as pd
-from tqdm import tqdm
 import concurrent.futures
-import requests
 import hashlib
-from pathlib import Path
 import itertools
+import json
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+from time import sleep
+
+import pandas as pd
+import requests
+from tqdm import tqdm
+
+import makura
 from makura import PKG_PATH, __version__
 from makura.taxonparse import TaxonomyParser
 
@@ -121,7 +126,7 @@ class AssemblySummary:
 
         taxparser = TaxonomyParser()
         taxparser.update_taxonomy_database()
-        taxids = [taxid for taxid in df["taxid"].to_list() if taxid]
+        taxids = [str(taxid) for taxid in df["taxid"].to_list() if taxid]
 
         taxid2lineage_dct = dict(
             [(taxid, taxparser.get_lineage(taxid)) for taxid in taxids]
@@ -161,13 +166,19 @@ class AssemblySummary:
 
     def filter_accession_by_taxid(self, taxids=[]):
         df = self.assembly_summary_df
-        accessions = df.apply(
-            lambda rec: rec["assembly_accession"]
-            if set([str(t) for t in taxids])
-            & set([value.split("|")[0] for value in rec["taxid_lineage"].split(";")])
-            else None,
-            axis=1,
-        )
+        accessions = [
+            a
+            for a in df.apply(
+                lambda rec: rec["assembly_accession"]
+                if set([str(t) for t in taxids])
+                & set(
+                    [value.split("|")[0] for value in rec["taxid_lineage"].split(";")]
+                )
+                else None,
+                axis=1,
+            ).to_list()
+            if a
+        ]
         return accessions
 
     def download_by_taxid(self, out_dir, taxids=[]):
@@ -232,6 +243,8 @@ class AssemblySummary:
         return (data, original_md5)
 
     def download_by_accession(self, out_dir, accessions=[], use_rsync=True, parallel=4):
+        if isinstance(accessions, str):
+            accessions = [accessions]
         out_dir = Path(out_dir)
         df = pd.read_csv(
             self.assembly_summary,
@@ -301,10 +314,16 @@ class AssemblySummary:
                         pbar.set_description(f"sleep 30s...")
                         sleep(30)
                         count = 0
-
-        with open(out_dir / "download_status.txt", "w") as f:
+        success = True
+        download_status_f = out_dir / "download_status.txt"
+        with open(download_status_f, "w") as f:
             for ftp_path, returncode in results.items():
                 f.write(f"{ftp_path}\t{returncode}\n")
+                if returncode == 3:
+                    success = False
+        if not success:
+            download_status_f.unlink()
+
         return results
 
     def filter_refseq_category(self, accessions=[], categories=[]):
@@ -331,6 +350,10 @@ class AssemblySummary:
             filter_df = filter_df[filter_df["assembly_accession"].isin(accessions)]
 
         return filter_df["assembly_accession"].to_list()
+
+    def select_microbiome(self):
+        accessions = self.filter_accession_by_group(groups=self.microbial_grops)
+        return accessions
 
     @staticmethod
     def sum_md5(data):
@@ -405,40 +428,38 @@ class AssemblySummary:
             | set(accessions)
         )
         df = self.assembly_summary_df
+        filter_df = df[df["assembly_accession"].isin(accessions)]
         if assembly_level:
             filter_df = df[df["assembly_level"].isin(assembly_level)]
         if refseq_category:
             filter_df = df[df["refseq_category"].isin(refseq_category)]
-        else:
-            filter_df = df
         return filter_df.to_dict("records")
-
-
-def download_microbiome(out_dir, update=False):
-    groups = ["archaea", "bacteria", "fungi", "protozoa", "viral", "algea"]
-
-    asmsum = AssemblySummary()
-    if update:
-        asmsum.update_assembly_summary()
-    df = pd.read_csv(
-        asmsum.assembly_summary,
-        sep="\t",
-        usecols=["assembly_accession", "group"],
-        low_memory=False,
-    )
-    print("uniq md5checksums.txt and remove genomes not in md5checksums.txt")
-    removed = asmsum.check_genomes(out_dir / "md5checksums.txt")
-    print(f"Remove {len(removed)} genomes")
-    micro_df = df[df["group"].isin(groups)]
-    accessions = micro_df["assembly_accession"].to_list()
-    asmsum.download_by_accession(out_dir, accessions)
 
 
 def main():
     def get_argument():
+        class ExplicitDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+            def _get_help_string(self, action):
+                if action.default in (None, False):
+                    return action.help
+                return super()._get_help_string(action)
 
         asm_levels = ["chromosome", "complete", "contig", "scaffold"]
         refseq_categories = ["reference", "representative", "na"]
+        groups = [
+            "archaea",
+            "bacteria",
+            "fungi",
+            "invertebrate",
+            "metagenomes",
+            "other",
+            "plant",
+            "protozoa",
+            "unknown",
+            "vertebrate_mammalian",
+            "vertebrate_other",
+            "viral",
+        ]
 
         def check_file(path):
             if not path:
@@ -479,20 +500,48 @@ def main():
             else:
                 return cat_ls
 
+        def limit_parellel(n):
+            n = int(n)
+            max_task = 8
+            if n > max_task:
+                raise TypeError(f"maximum number of task is {max_task}")
+            else:
+                return n
+
         parser = argparse.ArgumentParser(
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-            description="Mango: Download NCBI genomes",
+            formatter_class=ExplicitDefaultsHelpFormatter,
+            description=f"{makura.__name__.capitalize()}: Download NCBI genomes",
         )
         parser.add_argument(
-            "--version", "-v", action="version", version=f"%(prog)s {__version__}"
+            "--version",
+            "-v",
+            action="version",
+            version=f"{makura.__name__} {__version__}",
         )
 
         subcmd = parser.add_subparsers(
-            dest="subcmd", description="subcommands", metavar="SUBCOMMAND"
+            dest="subcmd",
+            description="subcommands",
+            metavar="SUBCOMMAND",
         )
+
+        update = subcmd.add_parser(
+            "update",
+            help="update assembly summary and taxonomy information",
+            formatter_class=ExplicitDefaultsHelpFormatter,
+        )
+
+        update.add_argument(
+            "--assembly-source",
+            default="refseq",
+            choices=["refseq", "genbank"],
+            help="select RefSeq(GCF_) or Genbank(GCA_) genomes",
+        )
+
         download = subcmd.add_parser(
             "download",
             help="Download genomes from RefSeq or GenBank database",
+            formatter_class=ExplicitDefaultsHelpFormatter,
         )
         download.add_argument(
             "--out_dir",
@@ -527,6 +576,16 @@ def main():
             "--taxid-list", help="Download by taxid list", type=check_file
         )
         input_group.add_argument(
+            "--groups",
+            "-g",
+            default=[],
+            type=split_comma,
+            help=f"""
+                Limit to genomes at one or more groups (comma-separated)\n
+                {','.join(groups)}
+                """,
+        )
+        input_group.add_argument(
             "--microbiome", "-m", help="Download microbiome", action="store"
         )
 
@@ -556,21 +615,38 @@ def main():
             help="select RefSeq(GCF_) or Genbank(GCA_) genomes",
         )
 
+        download.add_argument(
+            "--download-method",
+            default="rsync",
+            choices=["rsync", "https"],
+            help="select the method for downloading genomes",
+        )
+        download.add_argument(
+            "-p",
+            "--parallel",
+            dest="parallel",
+            type=limit_parellel,
+            default=4,
+            help="Download genome with multiple processes (max: 8)",
+        )
         summary = subcmd.add_parser(
             "summary",
+            formatter_class=ExplicitDefaultsHelpFormatter,
             help="Print a data report with genome metadata from RefSeq or GenBank database in JSON format",
         )
-
+        summary.add_argument(
+            "--update", "-U", help="update the assembly summary", action="store_true"
+        )
         summary_input_group = summary.add_mutually_exclusive_group(required=True)
         summary_input_group.add_argument(
             "--accessions",
             "-a",
             default=[],
-            help="Download by assembly accessions (comma-separated)",
+            help="print records by assembly accessions (comma-separated)",
         )
         summary_input_group.add_argument(
             "--accession-list",
-            help="Download by assembly accession list",
+            help="print records by assembly accession list",
             type=check_file,
         )
         summary_input_group.add_argument(
@@ -578,16 +654,19 @@ def main():
             "-t",
             default=[],
             type=split_comma,
-            help="Download by taxid (comma-separated)",
+            help="print records by taxid (comma-separated)",
         )
         summary_input_group.add_argument(
-            "--taxid-list", help="Download by taxid list", type=check_file
+            "--taxid-list", help="print records by taxid list", type=check_file
         )
         summary_input_group.add_argument(
-            "--microbiome", "-m", help="Download microbiome", action="store"
+            "--microbiome",
+            "-m",
+            help="print records of microbiome",
+            action="store_true",
         )
 
-        summary_input_group.add_argument(
+        summary.add_argument(
             "--assembly-level",
             default=[],
             type=check_levels,
@@ -596,7 +675,7 @@ def main():
             """,
         )
 
-        summary_input_group.add_argument(
+        summary.add_argument(
             "--refseq-category",
             default=[],
             type=check_refseq_category,
@@ -606,7 +685,7 @@ def main():
                 """,
         )
 
-        summary_input_group.add_argument(
+        summary.add_argument(
             "--assembly-source",
             default="refseq",
             choices=["refseq", "genbank"],
@@ -616,14 +695,16 @@ def main():
         return args
 
     args = get_argument()
-    refseq_category = args.refseq_category
+
     assembly_source = args.assembly_source
-    out_dir = args.out_dir
-    asmsum = AssemblySummary()
+    asmsum = AssemblySummary(db_type=assembly_source)
 
-    if args.update:
-        asmsum.update_assembly_summary(db_type=args.assembly_source)
+    if args.subcmd == "update":
+        asmsum.update_assembly_summary()
+        sys.exit(0)
 
+    refseq_category = args.refseq_category
+    assembly_level = args.assembly_level
     if args.accessions or args.accession_list:
         if args.accessions:
             accessions = args.accessions
@@ -632,9 +713,6 @@ def main():
                 accessions = [
                     row.strip("\n ") for row in f.readlines() if row.strip("\n ")
                 ]
-        asmsum.download_by_accession(
-            out_dir, accessions=accessions, use_rsync=True, parallel=4
-        )
 
     elif args.taxids or args.taxid_list:
         if args.taxids:
@@ -642,7 +720,40 @@ def main():
         else:
             with open(args.taxid_list, "r") as f:
                 taxids = [row.strip("\n ") for row in f.readlines() if row.strip("\n ")]
-        asmsum.download_by_taxid(out_dir, taxids=taxids)
+        accessions = asmsum.filter_accession_by_taxid(taxids=taxids)
 
     elif args.groups:
-        asmsum.download_by_group(out_dir, groups=args.groups)
+        accessions = asmsum.filter_accession_by_group(groups=args.groups)
+
+    elif args.micrbiome:
+        accessions = asmsum.select_microbiome()
+
+    else:
+        accessions = []
+
+    if refseq_category:
+        accessions = asmsum.filter_refseq_category(
+            accessions=accessions, categories=refseq_category
+        )
+
+    if assembly_level:
+        accessions = asmsum.filter_assembly_level(
+            accessions=accessions, levels=assembly_level
+        )
+
+    if args.subcmd == "download":
+        out_dir = args.out_dir
+        parallel = args.parallel
+        use_rsync = True if args.download_method == "rsync" else False
+
+        md5checksums_f = out_dir / "md5checksums.txt"
+        if md5checksums_f.is_file():
+            print("uniq md5checksums.txt and remove genomes not in md5checksums.txt")
+            removed = asmsum.check_genomes(md5checksums_f)
+            print(f"Remove {len(removed)} genomes")
+        asmsum.download_by_accession(
+            out_dir, accessions=accessions, use_rsync=use_rsync, parallel=parallel
+        )
+    elif args.subcmd == "summary":
+        records = asmsum.summary(accessions=accessions)
+        print(json.dumps(records, indent=4))
