@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- rsync (linux command, required for downloading NCBI genoemes)
+- rsync (linux command, required for downloading NCBI genomes)
 - python 3.8 (or greater)
 
 ## Installation
