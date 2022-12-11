@@ -1,9 +1,11 @@
 [tool.poetry]
 name = "makura"
-version = "1.0.0"
-description = ""
+version = "1.0.1"
+description = "NCBI Genome downloader"
 authors = ["Hung-Lin, Chen <hunglin59638@gmail.com>"]
-license = "GPL3"
+license = "GPL-3.0-or-later"
+readme = "README.md"
+repository = "https://github.com/hunglin59638/makura"
 
 [tool.poetry.dependencies]
 python = ">=3.8,<4"
@@ -16,7 +18,8 @@ tqdm = "^4.64.1"
 ipykernel = "^6.17.1"
 black = "^22.10.0"
 isort = "^5.10.1"
-ncbi-genome-download = "^0.3.1"
+poetry2setup = "^1.1.0"
+twine = "^4.0.2"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
