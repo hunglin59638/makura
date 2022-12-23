@@ -286,6 +286,8 @@ class AssemblySummary:
 
             return returncode
 
+        import time
+
         with tqdm(total=filter_df.shape[0], desc="Download NCBI genomes") as pbar:
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=parallel
@@ -301,7 +303,7 @@ class AssemblySummary:
                 results = {}
                 count = 0
                 for future in concurrent.futures.as_completed(futures):
-
+                    time.sleep(1)
                     org_name, ftp_path = futures[future]
                     pbar.set_description(f"{org_name} is downloaded")
                     returncode = future.result()
@@ -489,7 +491,13 @@ def main():
             if set(lvl_ls) - set(asm_levels):
                 raise ImportError(f"assembly-level must be {','.join(asm_levels)}")
             else:
-                return lvl_ls
+                lvl_map = dict(
+                    zip(
+                        ["chromosome", "complete", "contig", "scaffold"],
+                        ["Chromosome", "Complete Genome", "Contig", "Scaffold"],
+                    )
+                ) 
+                return lvl[lvl_map[lvl] for lvl in lvl_ls]_ls
 
         def check_refseq_category(str_category):
             cat_ls = split_comma(str_category)
