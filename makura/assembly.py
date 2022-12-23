@@ -165,7 +165,7 @@ class AssemblySummary:
         self.download_by_accession(out_dir, accessions)
 
     def filter_accession_by_taxid(self, taxids=[]):
-        df = self.assembly_summary_df
+        df = self.assembly_summary_df.dropna(subset=["taxid_lineage", "taxid"])
         accessions = [
             a
             for a in df.apply(
