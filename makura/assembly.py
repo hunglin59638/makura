@@ -286,8 +286,6 @@ class AssemblySummary:
 
             return returncode
 
-        import time
-
         with tqdm(total=filter_df.shape[0], desc="Download NCBI genomes") as pbar:
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=parallel
@@ -303,7 +301,6 @@ class AssemblySummary:
                 results = {}
                 count = 0
                 for future in concurrent.futures.as_completed(futures):
-                    time.sleep(1)
                     org_name, ftp_path = futures[future]
                     pbar.set_description(f"{org_name} is downloaded")
                     returncode = future.result()
@@ -316,6 +313,7 @@ class AssemblySummary:
                         pbar.set_description(f"sleep 30s...")
                         sleep(30)
                         count = 0
+
         success = True
         download_status_f = out_dir / "download_status.txt"
         with open(download_status_f, "w") as f:
@@ -496,8 +494,8 @@ def main():
                         ["chromosome", "complete", "contig", "scaffold"],
                         ["Chromosome", "Complete Genome", "Contig", "Scaffold"],
                     )
-                ) 
-                return lvl[lvl_map[lvl] for lvl in lvl_ls]_ls
+                )
+                return [lvl_map[lvl] for lvl in lvl_ls]
 
         def check_refseq_category(str_category):
             cat_ls = split_comma(str_category)
