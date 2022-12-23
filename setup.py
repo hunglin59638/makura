@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 from setuptools import setup
 
 packages = ["makura"]
@@ -12,13 +13,18 @@ install_requires = [
     "tqdm>=4.64.1,<5.0.0",
 ]
 
+
+def get_readme():
+    return Path("README.md").read_text()
+
+
 entry_points = {"console_scripts": ["makura = makura.assembly:main"]}
 
 setup_kwargs = {
     "name": "makura",
-    "version": "1.0.1",
-    "description": "",
-    "long_description": "None",
+    "version": "1.0.2",
+    "description": "Makura: NCBI Genome downloader",
+    "long_description": get_readme(),
     "author": "Hung-Lin, Chen",
     "author_email": "hunglin59638@gmail.com",
     "maintainer": "Hung-Lin, Chen",
