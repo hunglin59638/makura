@@ -337,7 +337,7 @@ class AssemblySummary:
         if accessions:
             filter_df = filter_df[filter_df["assembly_accession"].isin(accessions)]
 
-        return filter_df["assembly_accession"].to_list()
+        return filter_df["assembly_accession"].to_list() if accessions else []
 
     def filter_assembly_level(self, accessions=[], levels=[]):
         if not levels:
@@ -349,7 +349,7 @@ class AssemblySummary:
         if accessions:
             filter_df = filter_df[filter_df["assembly_accession"].isin(accessions)]
 
-        return filter_df["assembly_accession"].to_list()
+        return filter_df["assembly_accession"].to_list() if accessions else []
 
     def select_microbiome(self):
         accessions = self.filter_accession_by_group(groups=self.microbial_grops)
@@ -720,6 +720,7 @@ def main():
         else:
             with open(args.taxid_list, "r") as f:
                 taxids = [row.strip("\n ") for row in f.readlines() if row.strip("\n ")]
+
         accessions = asmsum.filter_accession_by_taxid(taxids=taxids)
 
     elif args.groups:
