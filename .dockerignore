@@ -1,0 +1,8 @@
+assembly/assembly_summary_genbank.txt
+assembly/assembly_summary_refseq.txt
+dist
+build
+markura.egg.info
+.venv
+assembly.ipynb
+taxdump.tar.gz

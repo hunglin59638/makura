@@ -18,6 +18,7 @@ from tqdm import tqdm
 import makura
 from makura import PKG_PATH, __version__
 from makura.taxonparse import TaxonomyParser
+from makura.api import app
 
 AGLEA_TAXIDS = [
     2836,
@@ -80,8 +81,11 @@ class AssemblySummary:
 
     microbial_grops = ["archaea", "bacteria", "fungi", "viral", "protozoa", "aglea"]
 
-    def __init__(self, assembly_summary=None, db_type="refseq"):
+    def __init__(
+        self, assembly_summary=None, assembly_summary_df=None, db_type="refseq"
+    ):
         self.db_type = db_type
+
         if self.db_type not in ("refseq", "genbank"):
             raise Exception("db_type must be refseq or genbank")
         self.assembly_summary = (
@@ -89,10 +93,15 @@ class AssemblySummary:
             if assembly_summary is None
             else Path(assembly_summary)
         )
-        if not self.assembly_summary.is_file():
-            self.update_assembly_summary()
+        self.updated = False
+        if assembly_summary_df is None:
+            if not self.assembly_summary.is_file():
+                self.update_assembly_summary()
+                self.updated = True
 
-        self.read_assembly_summary()
+            self.read_assembly_summary()
+        else:
+            self.assembly_summary_df = assembly_summary_df
 
     def read_assembly_summary(self):
         self.assembly_summary_df = pd.read_csv(
@@ -242,7 +251,9 @@ class AssemblySummary:
 
         return (data, original_md5)
 
-    def download_by_accession(self, out_dir, accessions=[], use_rsync=True, parallel=4):
+    def download_by_accession(
+        self, out_dir, accessions=[], use_rsync=True, parallel=4, debug=False
+    ):
         if isinstance(accessions, str):
             accessions = [accessions]
         out_dir = Path(out_dir)
@@ -252,7 +263,8 @@ class AssemblySummary:
             usecols=["assembly_accession", "organism_name", "ftp_path"],
         )
         filter_df = df[
-            (df["assembly_accession"].isin(accessions)) & (df["ftp_path"] != "na")
+            (df["assembly_accession"].str.contains("|".join(accessions)))
+            & (df["ftp_path"] != "na")
         ]
 
         def download_iter():
@@ -313,16 +325,19 @@ class AssemblySummary:
                         pbar.set_description(f"sleep 30s...")
                         sleep(30)
                         count = 0
-
-        success = True
-        download_status_f = out_dir / "download_status.txt"
-        with open(download_status_f, "w") as f:
-            for ftp_path, returncode in results.items():
-                f.write(f"{ftp_path}\t{returncode}\n")
-                if returncode == 3:
-                    success = False
-        if not success:
-            download_status_f.unlink()
+        if debug:
+            download_status_f = out_dir / "download_status.txt"
+            with open(download_status_f, "w") as f:
+                for ftp_path, returncode in results.items():
+                    if returncode == 1:
+                        message = "existed"
+                    elif returncode == 2:
+                        message = "success"
+                    elif returncode == 3:
+                        message = "failed"
+                    else:
+                        message = "unknown"
+                    f.write(f"{ftp_path}\t{message}\n")
 
         return results
 
@@ -428,11 +443,15 @@ class AssemblySummary:
             | set(accessions)
         )
         df = self.assembly_summary_df
-        filter_df = df[df["assembly_accession"].isin(accessions)]
+        filter_df = df[df["assembly_accession"].str.contains("|".join(accessions))]
         if assembly_level:
             filter_df = df[df["assembly_level"].isin(assembly_level)]
         if refseq_category:
             filter_df = df[df["refseq_category"].isin(refseq_category)]
+        if filter_df.shape[0] == 0:
+            sys.stderr.write(
+                "check input the right assembly source (refseq or genbank)\n"
+            )
         return filter_df.to_dict("records")
 
 
@@ -564,6 +583,7 @@ def main():
             "--accessions",
             "-a",
             default=[],
+            type=split_comma,
             help="Download by assembly accessions (comma-separated)",
         )
         input_group.add_argument(
@@ -635,6 +655,11 @@ def main():
             default=4,
             help="Download genome with multiple processes (max: 8)",
         )
+        download.add_argument(
+            "--debug",
+            action="store_true",
+            help="Activate debug mode, it will output download_status.txt",
+        )
         summary = subcmd.add_parser(
             "summary",
             formatter_class=ExplicitDefaultsHelpFormatter,
@@ -648,6 +673,7 @@ def main():
             "--accessions",
             "-a",
             default=[],
+            type=split_comma,
             help="print records by assembly accessions (comma-separated)",
         )
         summary_input_group.add_argument(
@@ -697,16 +723,28 @@ def main():
             choices=["refseq", "genbank"],
             help="select RefSeq(GCF_) or Genbank(GCA_) genomes",
         )
+        api = subcmd.add_parser(
+            "api",
+            help="run RESTful API to get assembly summary",
+            formatter_class=ExplicitDefaultsHelpFormatter,
+        )
+        api.add_argument(
+            "--port", default=5000, type=str, help="which port to create API"
+        )
         args = parser.parse_args()
         return args
 
     args = get_argument()
+    if args.subcmd == "api":
+        app.run(host="0.0.0.0", port=args.port)
+        sys.exit(0)
 
     assembly_source = args.assembly_source
     asmsum = AssemblySummary(db_type=assembly_source)
 
     if args.subcmd == "update":
-        asmsum.update_assembly_summary()
+        if not asmsum.updated:
+            asmsum.update_assembly_summary()
         sys.exit(0)
 
     refseq_category = args.refseq_category
@@ -752,6 +790,7 @@ def main():
         out_dir = args.out_dir
         parallel = args.parallel
         use_rsync = True if args.download_method == "rsync" else False
+        debug = args.debug
 
         md5checksums_f = out_dir / "md5checksums.txt"
         if md5checksums_f.is_file():
@@ -759,7 +798,11 @@ def main():
             removed = asmsum.check_genomes(md5checksums_f)
             print(f"Remove {len(removed)} genomes")
         asmsum.download_by_accession(
-            out_dir, accessions=accessions, use_rsync=use_rsync, parallel=parallel
+            out_dir,
+            accessions=accessions,
+            use_rsync=use_rsync,
+            parallel=parallel,
+            debug=debug,
         )
     elif args.subcmd == "summary":
         records = asmsum.summary(accessions=accessions)

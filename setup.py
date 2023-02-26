@@ -7,6 +7,7 @@ packages = ["makura"]
 package_data = {"": ["*"]}
 
 install_requires = [
+    "Flask>=2.2.3,<3.0.0",
     "ete3>=3.1.2,<4.0.0",
     "pandas>=1.5.1,<2.0.0",
     "requests>=2.28.1,<3.0.0",
@@ -22,7 +23,7 @@ entry_points = {"console_scripts": ["makura = makura.assembly:main"]}
 
 setup_kwargs = {
     "name": "makura",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "description": "Makura: NCBI Genome downloader",
     "long_description": get_readme(),
     "author": "Hung-Lin, Chen",

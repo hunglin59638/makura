@@ -29,6 +29,11 @@ install locally
 python setup.py install
 ```
 
+install from docker
+```
+docker pull hunglin59638/makura
+```
+
 ## Usage
 
 Update the assembly summary and taxonomy information while first using.
@@ -76,9 +81,18 @@ makura download --group bacteria,fungi --parallel 4
 ```
 
 While downloading the genomes, makura can check the MD5 checksum of them.
-The MD5 values was stored named `md5checksums.txt` in output directory.
+The MD5 values was stored to a file named `md5checksums.txt` in output directory.
 
-
+## Developing function
+Using the RESTful API to get assembly summary
+1. run the API server
+```
+docker run --rm -p 5000:5000 hunglin59638/makura:1.1.0 makura api --port 5000
+```
+2. get the summary of assembly accessions
+```
+curl http://localhost:5000/summary?accessions=GCA_002287175.1,GCA_000762265.1
+```
 ## Features in the future
 - Creating minimap2 and bwa index using downloaded genomes.
 - Downloading genomes by organism name, biosample, bioproject, etc.

@@ -192,4 +192,4 @@ cython_debug/
 
 *.ipynb
 taxdump.tar.gz
-assembly_summary_refseq.txt
+assembly_summary_*.txt
