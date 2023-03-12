@@ -47,7 +47,6 @@ AGLEA_TAXIDS = [
 
 
 class AssemblySummary:
-
     _REFSEQ_GROUPS = [
         "archaea",
         "bacteria",
@@ -79,7 +78,15 @@ class AssemblySummary:
 
     _ASSEMBLY_LEVEL = ["Chromosome", "Complete Genome", "Contig", "Scaffold"]
 
-    microbial_grops = ["archaea", "bacteria", "fungi", "viral", "protozoa", "aglea"]
+    microbial_grops = [
+        "archaea",
+        "bacteria",
+        "fungi",
+        "viral",
+        "protozoa",
+        "invertebrate",
+        "aglea",
+    ]
 
     def __init__(
         self, assembly_summary=None, assembly_summary_df=None, db_type="refseq"
@@ -88,8 +95,10 @@ class AssemblySummary:
 
         if self.db_type not in ("refseq", "genbank"):
             raise Exception("db_type must be refseq or genbank")
+        self.assembly_summary_dir = PKG_PATH / "data"
+        self.assembly_summary_dir.mkdir(exist_ok=True)
         self.assembly_summary = (
-            PKG_PATH / f"assembly_summary_{db_type}.txt"
+            self.assembly_summary_dir / f"assembly_summary_{db_type}.txt"
             if assembly_summary is None
             else Path(assembly_summary)
         )
@@ -128,7 +137,7 @@ class AssemblySummary:
                 else:
                     row = f"{row}\t{group}".split("\t")
                     rows.append(row)
-            print(f"{group} of assembly summary is fetched")
+            print(f"{group} of assembly summary is fetched", file=sys.stderr)
 
         cols.append("group")
         df = pd.DataFrame(rows, columns=cols)
@@ -197,7 +206,6 @@ class AssemblySummary:
         )
 
     def _download_job(self, ftp_path, out_dir, use_rsync=True):
-
         prefix = ftp_path.split("/")[-1]
         local_genome_file = Path(out_dir) / f"{prefix}_genomic.fna.gz"
         genome_url = f"{ftp_path}/{prefix}_genomic.fna.gz"
@@ -209,7 +217,10 @@ class AssemblySummary:
                 f"rsync --copy-links --times --quiet {genome_url} {out_dir}"
             )
             if returncode:
-                print(f"CMD: rsync --copy-links --times --quiet {genome_url} {out_dir}")
+                print(
+                    f"CMD: rsync --copy-links --times --quiet {genome_url} {out_dir}",
+                    file=sys.stderr,
+                )
                 data = None
             else:
                 data = local_genome_file
@@ -227,7 +238,6 @@ class AssemblySummary:
                 tmp_file.unlink()
 
         else:
-
             with requests.Session() as session:
                 data = b""
                 r = session.get(genome_url, stream=True)
@@ -393,7 +403,6 @@ class AssemblySummary:
         if md5_returned == md5_value:
             return True
         else:
-
             return False
 
     @staticmethod
@@ -434,8 +443,14 @@ class AssemblySummary:
         [(md5checksums.parent / file).unlink() for file in need_removed]
         return list(need_removed)
 
-    def summary(
-        self, accessions=[], taxids=[], groups=[], assembly_level=[], refseq_category=[]
+    def gen_summary(
+        self,
+        out_fmt="tab",
+        accessions=[],
+        taxids=[],
+        groups=[],
+        assembly_level=[],
+        refseq_category=[],
     ):
         accessions = list(
             set(self.filter_accession_by_group(taxids))
@@ -452,7 +467,13 @@ class AssemblySummary:
             sys.stderr.write(
                 "check input the right assembly source (refseq or genbank)\n"
             )
-        return filter_df.to_dict("records")
+        if out_fmt == "tab":
+            yield "\t".join(filter_df.columns)
+            for _, row in filter_df.iterrows():
+                yield "\t".join([str(i) for i in row.to_list()])
+        else:
+            for _, row in filter_df.iterrows():
+                yield json.dumps(row.to_dict())
 
 
 def main():
@@ -558,6 +579,7 @@ def main():
 
         update.add_argument(
             "--assembly-source",
+            "-s",
             default="refseq",
             choices=["refseq", "genbank"],
             help="select RefSeq(GCF_) or Genbank(GCA_) genomes",
@@ -617,6 +639,7 @@ def main():
 
         download.add_argument(
             "--assembly-level",
+            "-l",
             default=[],
             type=check_levels,
             help=f"""Limit to genomes at one or more assembly levels (comma-separated)
@@ -626,6 +649,7 @@ def main():
 
         download.add_argument(
             "--refseq-category",
+            "-c",
             default=[],
             type=check_refseq_category,
             help=f"""
@@ -692,6 +716,16 @@ def main():
             "--taxid-list", help="print records by taxid list", type=check_file
         )
         summary_input_group.add_argument(
+            "--groups",
+            "-g",
+            default=[],
+            type=split_comma,
+            help=f"""
+                Limit to genomes at one or more groups (comma-separated)\n
+                {','.join(groups)}
+                """,
+        )
+        summary_input_group.add_argument(
             "--microbiome",
             "-m",
             help="print records of microbiome",
@@ -700,6 +734,7 @@ def main():
 
         summary.add_argument(
             "--assembly-level",
+            "-l",
             default=[],
             type=check_levels,
             help=f"""Limit to genomes at one or more assembly levels (comma-separated)
@@ -709,6 +744,7 @@ def main():
 
         summary.add_argument(
             "--refseq-category",
+            "-c",
             default=[],
             type=check_refseq_category,
             help=f"""
@@ -719,9 +755,15 @@ def main():
 
         summary.add_argument(
             "--assembly-source",
+            "-s",
             default="refseq",
             choices=["refseq", "genbank"],
             help="select RefSeq(GCF_) or Genbank(GCA_) genomes",
+        )
+        summary.add_argument(
+            "--as-json-lines",
+            action="store_true",
+            help="output assembly summary as jsonlines format",
         )
         api = subcmd.add_parser(
             "api",
@@ -770,7 +812,7 @@ def main():
     elif args.groups:
         accessions = asmsum.filter_accession_by_group(groups=args.groups)
 
-    elif args.micrbiome:
+    elif args.microbiome:
         accessions = asmsum.select_microbiome()
 
     else:
@@ -794,9 +836,12 @@ def main():
 
         md5checksums_f = out_dir / "md5checksums.txt"
         if md5checksums_f.is_file():
-            print("uniq md5checksums.txt and remove genomes not in md5checksums.txt")
+            print(
+                "uniq md5checksums.txt and remove genomes not in md5checksums.txt",
+                file=sys.stderr,
+            )
             removed = asmsum.check_genomes(md5checksums_f)
-            print(f"Remove {len(removed)} genomes")
+            print(f"Remove {len(removed)} genomes", file=sys.stderr)
         asmsum.download_by_accession(
             out_dir,
             accessions=accessions,
@@ -805,5 +850,6 @@ def main():
             debug=debug,
         )
     elif args.subcmd == "summary":
-        records = asmsum.summary(accessions=accessions)
-        print(json.dumps(records, indent=4))
+        out_fmt = "jsonlines" if args.as_json_lines else "tab"
+        for row in asmsum.gen_summary(accessions=accessions, out_fmt=out_fmt):
+            print(row, file=sys.stdout)
