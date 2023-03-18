@@ -1,42 +1,54 @@
 # -*- coding: utf-8 -*-
+import toml
 from pathlib import Path
 from setuptools import setup
 
-packages = ["makura"]
+
+def read_pyproject_toml():
+    pyproject_toml = Path(__file__).parent / "pyproject.toml"
+    pyproject_dct = toml.loads(pyproject_toml.read_text())
+    return pyproject_dct
+
+
+pyproject_dct = read_pyproject_toml()
 
 package_data = {"": ["*"]}
+exclude_package_data = {"": ["*.db", "*.gz", "test"]}
+python_requires = pyproject_dct["tool"]["poetry"]["dependencies"].pop("python")
 
 install_requires = [
-    "Flask>=2.2.3,<3.0.0",
-    "ete3>=3.1.2,<4.0.0",
-    "pandas>=1.5.1,<2.0.0",
-    "requests>=2.28.1,<3.0.0",
-    "tqdm>=4.64.1,<5.0.0",
+    f'{depend}{version.replace("^", ">=")}'
+    for depend, version in pyproject_dct["tool"]["poetry"]["dependencies"].items()
+]
+
+packages = [pyproject_dct["tool"]["poetry"]["name"]]
+package_data = {"": ["*"]}
+entry_points = {"console_scripts": ["makura = makura.assembly:main"]}
+
+author, author_email = [
+    row.strip(" <") for row in pyproject_dct["tool"]["poetry"]["authors"][0].split("<")
 ]
 
 
 def get_readme():
-    return Path("README.md").read_text()
+    return Path(pyproject_dct["tool"]["poetry"]["readme"]).read_text()
 
-
-entry_points = {"console_scripts": ["makura = makura.assembly:main"]}
 
 setup_kwargs = {
-    "name": "makura",
-    "version": "1.1.0",
-    "description": "Makura: NCBI Genome downloader",
+    "name": pyproject_dct["tool"]["poetry"]["name"],
+    "version": pyproject_dct["tool"]["poetry"]["version"],
+    "description": pyproject_dct["tool"]["poetry"]["description"],
     "long_description": get_readme(),
-    "author": "Hung-Lin, Chen",
-    "author_email": "hunglin59638@gmail.com",
-    "maintainer": "Hung-Lin, Chen",
-    "maintainer_email": "hunglin59638@gmail.com",
-    "url": "https://github.com/hunglin59638/makura",
+    "author": author,
+    "author_email": author_email,
+    "maintainer": author,
+    "maintainer_email": author_email,
+    "url": pyproject_dct["tool"]["poetry"]["repository"],
     "packages": packages,
     "package_data": package_data,
     "install_requires": install_requires,
     "entry_points": entry_points,
-    "python_requires": ">=3.8,<4",
+    "python_requires": python_requires,
 }
-
 
 setup(**setup_kwargs)

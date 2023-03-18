@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "makura"
-version = "1.1.0"
+version = "1.2.0"
 description = "NCBI Genome downloader"
 authors = ["Hung-Lin, Chen <hunglin59638@gmail.com>"]
 license = "GPL-3.0-or-later"
@@ -21,6 +21,7 @@ black = "^22.10.0"
 isort = "^5.10.1"
 poetry2setup = "^1.1.0"
 twine = "^4.0.2"
+toml = "^0.10.2"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
