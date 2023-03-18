@@ -38,7 +38,7 @@ docker pull hunglin59638/makura
 
 Update the assembly summary and taxonomy information while first using.
 ```
-makura update --assembly-source refseq
+makura update
 ```
 It's ok that you don't run the command, makura will automatically update if the assembly summary is not found.
 
@@ -49,9 +49,9 @@ makura download --group bacteria,fungi --assembly-level complete --assembly-sour
 ```
 
 
-Print the records of genomes with JSON format
+Print the records of genomes with JSON lines format, default is TAB
 ```
-makura summary --accession GCF_016700215.2
+makura summary --accession GCF_016700215.2 --as-json-lines
 ```
 
 Download genomes with selected taxids

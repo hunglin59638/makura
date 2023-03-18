@@ -26,7 +26,7 @@ package_data = {"": ["*"]}
 entry_points = {"console_scripts": ["makura = makura.assembly:main"]}
 
 author, author_email = [
-    row.strip(" <") for row in pyproject_dct["tool"]["poetry"]["authors"][0].split("<")
+    row.strip(" <>") for row in pyproject_dct["tool"]["poetry"]["authors"][0].split("<")
 ]
 
 

@@ -89,30 +89,16 @@ class AssemblySummary:
         "aglea",
     ]
 
-    def __init__(
-        self,  # assembly_summary=None, assembly_summary_df=None, db_type="refseq"
-    ):
-        # self.db_type = db_type
-
-        # if self.db_type not in ("refseq", "genbank"):
-        #     raise Exception("db_type must be refseq or genbank")
+    def __init__(self):
         self.assembly_summary_dir = DATA_DIR
         self.assembly_summary_dir.mkdir(exist_ok=True)
         self.assembly_summary_db = self.assembly_summary_dir / "assembly_summary.db"
-        # self.assembly_summary = (
-        #     self.assembly_summary_dir / f"assembly_summary_{db_type}.txt"
-        #     if assembly_summary is None
-        #     else Path(assembly_summary)
-        # )
+
         self.updated = False
         if not self.assembly_summary_db.is_file():
             if not self.assembly_summary_db.is_file():
                 self.update_assembly_summary()
                 self.updated = True
-
-            # sself.read_assembly_summary()
-        # else:
-        #     self.assembly_summary_df = assembly_summary_df
 
     def connect_db(self):
         self.db_conn = sqlite3.connect(self.assembly_summary_db)
