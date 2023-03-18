@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import sqlite3
 import concurrent.futures
 import hashlib
 import itertools
@@ -16,7 +17,7 @@ import requests
 from tqdm import tqdm
 
 import makura
-from makura import PKG_PATH, __version__
+from makura import PKG_PATH, DATA_DIR, __version__
 from makura.taxonparse import TaxonomyParser
 from makura.api import app
 
@@ -89,115 +90,151 @@ class AssemblySummary:
     ]
 
     def __init__(
-        self, assembly_summary=None, assembly_summary_df=None, db_type="refseq"
+        self,  # assembly_summary=None, assembly_summary_df=None, db_type="refseq"
     ):
-        self.db_type = db_type
+        # self.db_type = db_type
 
-        if self.db_type not in ("refseq", "genbank"):
-            raise Exception("db_type must be refseq or genbank")
-        self.assembly_summary_dir = PKG_PATH / "data"
+        # if self.db_type not in ("refseq", "genbank"):
+        #     raise Exception("db_type must be refseq or genbank")
+        self.assembly_summary_dir = DATA_DIR
         self.assembly_summary_dir.mkdir(exist_ok=True)
-        self.assembly_summary = (
-            self.assembly_summary_dir / f"assembly_summary_{db_type}.txt"
-            if assembly_summary is None
-            else Path(assembly_summary)
-        )
+        self.assembly_summary_db = self.assembly_summary_dir / "assembly_summary.db"
+        # self.assembly_summary = (
+        #     self.assembly_summary_dir / f"assembly_summary_{db_type}.txt"
+        #     if assembly_summary is None
+        #     else Path(assembly_summary)
+        # )
         self.updated = False
-        if assembly_summary_df is None:
-            if not self.assembly_summary.is_file():
+        if not self.assembly_summary_db.is_file():
+            if not self.assembly_summary_db.is_file():
                 self.update_assembly_summary()
                 self.updated = True
 
-            self.read_assembly_summary()
-        else:
-            self.assembly_summary_df = assembly_summary_df
+            # sself.read_assembly_summary()
+        # else:
+        #     self.assembly_summary_df = assembly_summary_df
 
-    def read_assembly_summary(self):
-        self.assembly_summary_df = pd.read_csv(
-            self.assembly_summary, sep="\t", low_memory=False
-        )
-        self.assembly_summary_df = self.assembly_summary_df.astype(
-            {"taxid": "int64", "species_taxid": "int64"}
-        )
+    def connect_db(self):
+        self.db_conn = sqlite3.connect(self.assembly_summary_db)
 
+    def close_db(self):
+        self.db_conn.close()
+
+    def use_sql(func):
+        def wrap(*args, **kwargs):
+            self = args[0]
+            self.connect_db()
+            result = func(self, *args[1:], **kwargs)
+            self.close_db()
+            return result
+
+        return wrap
+
+    @use_sql
+    def get_assembly_summary_cols(self):
+        cursor = self.db_conn.cursor()
+        cursor.execute("SELECT * FROM assembly_summary")
+        return [i[0] for i in cursor.description]
+
+    @use_sql
     def update_assembly_summary(self):
-        groups = (
-            self._REFSEQ_GROUPS if self.db_type == "refseq" else self._GENBANK_GROUPS
-        )
-
-        rows = []
-        for group in groups:
-            url = f"https://ftp.ncbi.nlm.nih.gov/genomes/{self.db_type}/{group}/assembly_summary.txt"
-            response = requests.get(url)
-            for row in response.text.split("\n"):
-                if row.startswith("#   See ") or not row:
-                    continue
-                elif row.startswith("#"):
-                    cols = row.strip("# ").strip().split("\t")
-                else:
-                    row = f"{row}\t{group}".split("\t")
-                    rows.append(row)
-            print(f"{group} of assembly summary is fetched", file=sys.stderr)
-
-        cols.append("group")
-        df = pd.DataFrame(rows, columns=cols)
+        if self.assembly_summary_db.is_file():
+            self.assembly_summary_db.unlink()
 
         taxparser = TaxonomyParser()
         taxparser.update_taxonomy_database()
-        taxids = [str(taxid) for taxid in df["taxid"].to_list() if taxid]
+        for groups, db_type in zip(
+            (self._REFSEQ_GROUPS, self._GENBANK_GROUPS), ("RefSeq", "GenBank")
+        ):
+            print(f"update {db_type} database")
+            rows = []
+            for group in groups:
+                url = f"https://ftp.ncbi.nlm.nih.gov/genomes/{db_type.lower()}/{group}/assembly_summary.txt"
+                response = requests.get(url)
+                for row in response.text.split("\n"):
+                    if row.startswith("#   See ") or not row:
+                        continue
+                    elif row.startswith("#"):
+                        cols = row.strip("# ").strip().split("\t")
+                    else:
+                        row = f"{row}\t{group}".split("\t")
+                        rows.append(row)
+                print(f"Get the {group} of assembly summary", file=sys.stderr)
 
-        taxid2lineage_dct = dict(
-            [(taxid, taxparser.get_lineage(taxid)) for taxid in taxids]
-        )
+            cols.append("group")
+            assembly_summary_df = pd.DataFrame(rows, columns=cols)
 
-        all_rank_taxids = all_rank_taxids = list(
-            set(list(itertools.chain.from_iterable(taxid2lineage_dct.values()))).union(
-                set(taxids)
+            taxids = [
+                str(taxid) for taxid in assembly_summary_df["taxid"].to_list() if taxid
+            ]
+
+            taxid2lineage_dct = dict(
+                [(taxid, taxparser.get_lineage(taxid)) for taxid in taxids]
             )
-        )
-        taxid2name_dct = taxparser.get_taxid_translator(all_rank_taxids)
-        taxid2rank_dct = taxparser.get_rank(all_rank_taxids)
-        taxid_rows = []
-        for taxid in taxids:
-            lineage = taxid2lineage_dct[taxid]
-            row = ";".join(
-                [
-                    "|".join([str(t), taxid2rank_dct[t], taxid2name_dct[t]])
-                    for t in lineage
-                ]
+
+            all_rank_taxids = all_rank_taxids = list(
+                set(
+                    list(itertools.chain.from_iterable(taxid2lineage_dct.values()))
+                ).union(set(taxids))
             )
-            taxid_rows.append(row)
-        taxid_df = pd.DataFrame(taxid_rows, columns=["taxid_lineage"])
+            taxid2name_dct = taxparser.get_taxid_translator(all_rank_taxids)
+            taxid2rank_dct = taxparser.get_rank(all_rank_taxids)
+            taxid_rows = []
+            for taxid in taxids:
+                lineage = taxid2lineage_dct[taxid]
+                row = ";".join(
+                    [
+                        "|".join([str(t), taxid2rank_dct[t], taxid2name_dct[t]])
+                        for t in lineage
+                    ]
+                )
+                taxid_rows.append(row)
+            taxid_df = pd.DataFrame(taxid_rows, columns=["taxid_lineage"])
 
-        final_df = pd.concat([df, taxid_df], axis=1)
-        final_df.to_csv(self.assembly_summary, index=False, sep="\t")
+            assembly_summary_df = pd.concat([assembly_summary_df, taxid_df], axis=1)
+            assembly_summary_df = assembly_summary_df.set_index("assembly_accession")
+            self.connect_db()
+            assembly_summary_df.to_sql(
+                "assembly_summary",
+                self.db_conn,
+                if_exists="append",
+                index=True,
+                index_label="assembly_accession",
+            )
+            self.db_conn.commit()
 
+    @use_sql
     def filter_accession_by_group(self, groups=[]):
-        df = self.assembly_summary_df
-        filter_df = df[df["group"].isin(groups)]
-        accessions = filter_df["assembly_accession"].to_list()
+        cursor = self.db_conn.cursor()
+        cursor.execute(
+            f"SELECT assembly_accession FROM assembly_summary WHERE `group` IN ({','.join(['?']*len(groups))})",
+            groups,
+        )
+        accessions = [res[0] for res in cursor.fetchall()]
         return accessions
 
     def download_by_group(self, out_dir, groups=[]):
         accessions = self.filter_accession_by_group(groups=groups)
         self.download_by_accession(out_dir, accessions)
 
+    @use_sql
     def filter_accession_by_taxid(self, taxids=[]):
-        df = self.assembly_summary_df.dropna(subset=["taxid_lineage", "taxid"])
-        accessions = [
-            a
-            for a in df.apply(
-                lambda rec: rec["assembly_accession"]
-                if set([str(t) for t in taxids])
-                & set(
-                    [value.split("|")[0] for value in rec["taxid_lineage"].split(";")]
-                )
-                else None,
-                axis=1,
-            ).to_list()
-            if a
-        ]
-        return accessions
+        cursor = self.db_conn.cursor()
+        cursor.execute(
+            f"SELECT assembly_accession,taxid_lineage,taxid FROM assembly_summary;"
+        )
+        asm_acc_ls = []
+        taxids = set([str(t) for t in taxids])
+        for row in cursor.fetchall():
+            asm_acc, taxid_lineage, taxid = row
+            if taxid_lineage is None or taxid is None:
+                continue
+
+            if taxids & set(
+                [value.split("|")[0] for value in taxid_lineage.split(";")]
+            ):
+                asm_acc_ls.append(asm_acc)
+        return asm_acc_ls
 
     def download_by_taxid(self, out_dir, taxids=[]):
         accessions = self.filter_accession_by_taxid(taxids=taxids)
@@ -261,29 +298,26 @@ class AssemblySummary:
 
         return (data, original_md5)
 
+    @use_sql
     def download_by_accession(
         self, out_dir, accessions=[], use_rsync=True, parallel=4, debug=False
     ):
         if isinstance(accessions, str):
             accessions = [accessions]
         out_dir = Path(out_dir)
-        df = pd.read_csv(
-            self.assembly_summary,
-            sep="\t",
-            usecols=["assembly_accession", "organism_name", "ftp_path"],
+
+        cursor = self.db_conn.cursor()
+        cursor.execute(
+            f"SELECT assembly_accession,organism_name,ftp_path FROM assembly_summary WHERE assembly_accession IN ({','.join(['?']*len(accessions))})",
+            accessions,
         )
-        filter_df = df[
-            (df["assembly_accession"].str.contains("|".join(accessions)))
-            & (df["ftp_path"] != "na")
-        ]
+        args = [(row[1], row[-1]) for row in cursor.fetchall() if row[-1] != "na"]
 
         def download_iter():
-            for index, row in filter_df.iterrows():
-                org_name = row["organism_name"]
-                ftp_path = row["ftp_path"]
-                yield org_name, ftp_path
+            for organism_name, ftp_path in args:
+                yield organism_name, ftp_path
 
-        def _job(org_name, ftp_path):
+        def _job(organism_name, ftp_path):
             """
             returncode: return download status
             1: the genome file is existed, and skill it
@@ -308,7 +342,7 @@ class AssemblySummary:
 
             return returncode
 
-        with tqdm(total=filter_df.shape[0], desc="Download NCBI genomes") as pbar:
+        with tqdm(total=len(args), desc="Download NCBI genomes") as pbar:
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=parallel
             ) as executor:
@@ -351,30 +385,46 @@ class AssemblySummary:
 
         return results
 
+    @use_sql
     def filter_refseq_category(self, accessions=[], categories=[]):
         if not categories:
             categories = self._REFSEQ_CATEGORY
+        cursor = self.db_conn.cursor()
+        conditions = (
+            f"assembly_accession IN ({','.join(['?']*len(accessions))}) AND"
+            if accessions
+            else ""
+        )
+        conditions = (
+            f"{conditions} refseq_category IN ({','.join(['?']*len(categories))});"
+        )
+        query = f"SELECT assembly_accession FROM assembly_summary WHERE {conditions}"
 
-        df = self.assembly_summary_df
-        filter_regex = "|".join([c.split(" ")[0] for c in categories])
-        filter_df = df[df["refseq_category"].str.match(filter_regex)]
+        cursor.execute(
+            query,
+            accessions + categories,
+        )
 
-        if accessions:
-            filter_df = filter_df[filter_df["assembly_accession"].isin(accessions)]
+        return [row[0] for row in cursor.fetchall()]
 
-        return filter_df["assembly_accession"].to_list() if accessions else []
-
+    @use_sql
     def filter_assembly_level(self, accessions=[], levels=[]):
         if not levels:
             levels = self._ASSEMBLY_LEVELS
 
-        df = self.assembly_summary_df
-        filter_df = df[df["assembly_level"].isin(levels)]
-
-        if accessions:
-            filter_df = filter_df[filter_df["assembly_accession"].isin(accessions)]
-
-        return filter_df["assembly_accession"].to_list() if accessions else []
+        cursor = self.db_conn.cursor()
+        conditions = (
+            f"assembly_accession IN ({','.join(accessions)}) AND" if accessions else ""
+        )
+        conditions = f"{conditions} assembly_level IN ({','.join(['?']*len(levels))});"
+        cursor.execute(
+            f"""SELECT assembly_accession 
+            FROM assembly_summary 
+            WHERE {conditions}
+            """,
+            accessions + levels,
+        )
+        return [row[0] for row in cursor.fetchall()]
 
     def select_microbiome(self):
         accessions = self.filter_accession_by_group(groups=self.microbial_grops)
@@ -423,8 +473,9 @@ class AssemblySummary:
         md5checksums = Path(md5checksums)
         self.uniq_md5checksums(md5checksums)
         checked_files = set()
-        with open(md5checksums, "r") as f:
-            for row in f.readlines():
+
+        with open(md5checksums, "r") as handle:
+            for row in handle.readlines():
                 row = row.strip("\n")
                 if not row:
                     continue
@@ -443,6 +494,7 @@ class AssemblySummary:
         [(md5checksums.parent / file).unlink() for file in need_removed]
         return list(need_removed)
 
+    @use_sql
     def gen_summary(
         self,
         out_fmt="tab",
@@ -453,16 +505,23 @@ class AssemblySummary:
         refseq_category=[],
     ):
         accessions = list(
-            set(self.filter_accession_by_group(taxids))
-            | set(self.filter_accession_by_taxid(groups))
+            set(self.filter_accession_by_group(groups))
+            | set(self.filter_accession_by_taxid(taxids))
             | set(accessions)
         )
-        df = self.assembly_summary_df
-        filter_df = df[df["assembly_accession"].str.contains("|".join(accessions))]
+        cols = self.get_assembly_summary_cols()
+        self.connect_db()
+        cursor = self.db_conn.cursor()
+        cursor.execute(
+            f"SELECT * FROM assembly_summary WHERE assembly_accession IN ({','.join(['?']*len(accessions))})",
+            accessions,
+        )
+        filter_df = pd.DataFrame(cursor.fetchall(), columns=cols)
+
         if assembly_level:
-            filter_df = df[df["assembly_level"].isin(assembly_level)]
+            filter_df = filter_df[filter_df["assembly_level"].isin(assembly_level)]
         if refseq_category:
-            filter_df = df[df["refseq_category"].isin(refseq_category)]
+            filter_df = filter_df[filter_df["refseq_category"].isin(refseq_category)]
         if filter_df.shape[0] == 0:
             sys.stderr.write(
                 "check input the right assembly source (refseq or genbank)\n"
@@ -580,9 +639,9 @@ def main():
         update.add_argument(
             "--assembly-source",
             "-s",
-            default="refseq",
-            choices=["refseq", "genbank"],
-            help="select RefSeq(GCF_) or Genbank(GCA_) genomes",
+            default="all",
+            choices=["all", "refseq", "genbank"],
+            help="Limit to 'refseq' (GCF_) or 'genbank' (GCA_) genomes",
         )
 
         download = subcmd.add_parser(
@@ -660,9 +719,10 @@ def main():
 
         download.add_argument(
             "--assembly-source",
-            default="refseq",
-            choices=["refseq", "genbank"],
-            help="select RefSeq(GCF_) or Genbank(GCA_) genomes",
+            "-s",
+            default="all",
+            choices=["all", "refseq", "genbank"],
+            help="Limit to 'refseq' (GCF_) or 'genbank' (GCA_) genomes",
         )
 
         download.add_argument(
@@ -756,9 +816,9 @@ def main():
         summary.add_argument(
             "--assembly-source",
             "-s",
-            default="refseq",
-            choices=["refseq", "genbank"],
-            help="select RefSeq(GCF_) or Genbank(GCA_) genomes",
+            default="all",
+            choices=["all", "refseq", "genbank"],
+            help="Limit to 'refseq' (GCF_) or 'genbank' (GCA_) genomes",
         )
         summary.add_argument(
             "--as-json-lines",
@@ -782,7 +842,7 @@ def main():
         sys.exit(0)
 
     assembly_source = args.assembly_source
-    asmsum = AssemblySummary(db_type=assembly_source)
+    asmsum = AssemblySummary()
 
     if args.subcmd == "update":
         if not asmsum.updated:
@@ -790,6 +850,11 @@ def main():
         sys.exit(0)
 
     refseq_category = args.refseq_category
+    refseq_category = [
+        f"{c} genome" if c in ("reference", "representative") else c
+        for c in refseq_category
+    ]
+
     assembly_level = args.assembly_level
     if args.accessions or args.accession_list:
         if args.accessions:
@@ -818,16 +883,22 @@ def main():
     else:
         accessions = []
 
-    if refseq_category:
-        accessions = asmsum.filter_refseq_category(
-            accessions=accessions, categories=refseq_category
-        )
+    if len(accessions) > 0:
+        if assembly_source == "genbank":
+            accessions = [a for a in accessions if a.startswith("GCA_")]
+        elif assembly_source == "refseq":
+            accessions = [a for a in accessions if a.startswith("GCF_")]
 
-    if assembly_level:
-        accessions = asmsum.filter_assembly_level(
-            accessions=accessions, levels=assembly_level
-        )
+        if refseq_category:
+            accessions = asmsum.filter_refseq_category(
+                accessions=accessions, categories=refseq_category
+            )
 
+        if assembly_level:
+            accessions = asmsum.filter_assembly_level(
+                accessions=accessions, levels=assembly_level
+            )
+    print(f"Number of assembly accession: {len(accessions)}", file=sys.stderr)
     if args.subcmd == "download":
         out_dir = args.out_dir
         parallel = args.parallel
@@ -840,8 +911,23 @@ def main():
                 "uniq md5checksums.txt and remove genomes not in md5checksums.txt",
                 file=sys.stderr,
             )
+            asm_acc_regex = "GC[A|F]_[0-9]{9}\.[0-9]+"
+            md5checksums_dct = dict(
+                [
+                    (re.search(asm_acc_regex, row)[0], row)
+                    for row in md5checksums_f.read_text().split("\n")
+                    if re.search(asm_acc_regex, row)
+                ]
+            )
+            no_target = set(md5checksums_dct.keys()) - set(accessions)
+            for asm_acc in no_target:
+                md5checksums_dct.pop(asm_acc)
+            md5checksums_f.write_text("\n".join(md5checksums_dct.values()) + "\n")
+
             removed = asmsum.check_genomes(md5checksums_f)
-            print(f"Remove {len(removed)} genomes", file=sys.stderr)
+            if len(removed) > 0:
+                print(f"Remove {len(removed)} genomes", file=sys.stderr)
+
         asmsum.download_by_accession(
             out_dir,
             accessions=accessions,
